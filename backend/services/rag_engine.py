@@ -1,6 +1,7 @@
 from qdrant_client import QdrantClient
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from llama_index.core import VectorStoreIndex
+from llama_index.core import VectorStoreIndex, Settings
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from config import settings
 
 client = None
@@ -29,7 +30,17 @@ def init_qdrant():
             dense_vector_name=None
         )
 
-        index = VectorStoreIndex.from_vector_store(store)
+        embed_model = HuggingFaceEmbedding(
+            model_name="BAAI/bge-base-en-v1.5"
+        )
+
+        # Force global embedding model
+        Settings.embed_model = embed_model
+
+        index = VectorStoreIndex.from_vector_store(
+            store,
+            embed_model=embed_model
+        )
 
         retriever = index.as_retriever(similarity_top_k=5)
 
@@ -45,7 +56,8 @@ def get_store():
 
 
 def get_embed_model():
-    return None
+    init_qdrant()
+    return embed_model
 
 
 def search(query: str):
