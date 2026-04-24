@@ -12,19 +12,20 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://monorepo-ebon-eight.vercel.app"
+    ],
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 os.makedirs("temp", exist_ok=True)
 
 processed_files = set()
-
-sessions = {
-    "chat-1": []
-}
+sessions = {"chat-1": []}
 
 
 @app.get("/")
@@ -38,10 +39,7 @@ def chat(req: ChatRequest):
     from services.llm_service import ask_llm
 
     lang = detect_lang(req.message)
-
-    query = req.message
-    if lang != "en":
-        query = to_english(req.message)
+    query = req.message if lang == "en" else to_english(req.message)
 
     greetings = ["hi", "hello", "hey", "hii"]
 
@@ -49,11 +47,6 @@ def chat(req: ChatRequest):
         answer = "Hello 👋 How can I help you with your videos?"
         if lang != "en":
             answer = translate_back(answer, lang)
-
-        sessions.setdefault(req.session_id, [])
-        sessions[req.session_id].append({"role": "user", "content": req.message})
-        sessions[req.session_id].append({"role": "assistant", "content": answer})
-
         return ChatResponse(answer=answer, sources=[])
 
     nodes = search(query)
@@ -62,39 +55,25 @@ def chat(req: ChatRequest):
         answer = "I couldn't find relevant information in uploaded videos."
         if lang != "en":
             answer = translate_back(answer, lang)
-
-        sessions.setdefault(req.session_id, [])
-        sessions[req.session_id].append({"role": "user", "content": req.message})
-        sessions[req.session_id].append({"role": "assistant", "content": answer})
-
         return ChatResponse(answer=answer, sources=[])
 
     top = sorted(nodes, key=lambda x: x.score, reverse=True)[:3]
     context = "\n".join([n.node.text for n in top])
 
     prompt = f"""
-Answer ONLY from the transcript context below.
+Answer ONLY from transcript context.
 
 Context:
 {context}
 
 Question:
 {query}
-
-Rules:
-- Use only context
-- Keep answer clear and concise
-- If not found, say not found in uploaded videos
 """
 
     answer = ask_llm(prompt)
 
     if lang != "en":
         answer = translate_back(answer, lang)
-
-    sessions.setdefault(req.session_id, [])
-    sessions[req.session_id].append({"role": "user", "content": req.message})
-    sessions[req.session_id].append({"role": "assistant", "content": answer})
 
     sources = []
     for n in top:
@@ -117,29 +96,40 @@ async def upload(files: List[UploadFile] = File(...)):
 
     uploaded = []
     skipped = []
+    failed = []
 
     for file in files:
-        if file.filename in processed_files:
-            skipped.append(file.filename)
-            continue
+        try:
+            if file.filename in processed_files:
+                skipped.append(file.filename)
+                continue
 
-        temp_path = os.path.join("temp", file.filename)
+            temp_path = os.path.join("temp", file.filename)
 
-        with open(temp_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            with open(temp_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
 
-        cloud = upload_video(temp_path)
+            cloud = upload_video(temp_path)
 
-        process_video(temp_path, cloud["url"], file.filename)
+            process_video(temp_path, cloud["url"], file.filename)
 
-        processed_files.add(file.filename)
+            processed_files.add(file.filename)
+            uploaded.append(file.filename)
 
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
-        uploaded.append(file.filename)
+        except Exception as e:
+            failed.append({
+                "file": file.filename,
+                "error": str(e)
+            })
 
-    return {"uploaded": uploaded, "skipped": skipped}
+    return {
+        "uploaded": uploaded,
+        "skipped": skipped,
+        "failed": failed
+    }
 
 
 @app.get("/api/sessions")
@@ -149,7 +139,7 @@ def get_sessions():
 
 @app.post("/api/sessions")
 def create_session():
-    sid = f"chat-{len(sessions) + 1}"
+    sid = f"chat-{len(sessions)+1}"
     sessions[sid] = []
     return {"id": sid, "name": sid}
 
