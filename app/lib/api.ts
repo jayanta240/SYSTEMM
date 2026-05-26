@@ -1,6 +1,6 @@
 const BASE =
-  process.env.NEXT_PUBLIC_API_URL ||
-  "https://chatbot-backend-zg1j.onrender.com";
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 export async function sendMessage(message: string, session_id: string) {
   const res = await fetch(`${BASE}/api/chat`, {
     method: "POST",
@@ -25,21 +25,24 @@ export async function uploadVideos(files: FileList) {
   return res.json();
 }
 
-export async function getSessions() {
-  const res = await fetch(`${BASE}/api/sessions`);
+export async function generateVideo(message: string) {
+  const res = await fetch(`${BASE}/api/generate-video`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, session_id: "chat-1" }),
+  });
+
+  return res.json();
+}
+
+export async function getMessages(session_id: string) {
+  const res = await fetch(`${BASE}/api/sessions/${session_id}/messages`);
   return res.json();
 }
 
 export async function createSession() {
   const res = await fetch(`${BASE}/api/sessions`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({}),
   });
-  return res.json();
-}
-
-export async function getMessages(session_id: string) {
-  const res = await fetch(`${BASE}/api/sessions/${session_id}/messages`);
   return res.json();
 }

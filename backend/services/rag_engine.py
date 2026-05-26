@@ -1,58 +1,65 @@
 from qdrant_client import QdrantClient
-from llama_index.vector_stores.qdrant import QdrantVectorStore
-from llama_index.core import VectorStoreIndex, Settings
+from qdrant_client.models import VectorParams, Distance
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from config import settings
 
+COLLECTION_NAME = "learning_content"
+
 client = None
-store = None
-index = None
-retriever = None
 embed_model = None
 
 
 def init_qdrant():
-    global client, store, index, retriever, embed_model
+    global client, embed_model
 
-    if retriever is not None:
+    if client is not None:
         return
 
-    try:
-        client = QdrantClient(
-            url=settings.QDRANT_URL,
-            api_key=settings.QDRANT_API_KEY,
-            timeout=30
+    client = QdrantClient(
+        url=settings.QDRANT_URL,
+        api_key=settings.QDRANT_API_KEY,
+        timeout=30
+    )
+
+    # create collection if not exists
+    collections = [c.name for c in client.get_collections().collections]
+
+    if COLLECTION_NAME not in collections:
+        print("⚡ Creating Qdrant collection...")
+
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(
+                size=768,
+                distance=Distance.COSINE,
+            ),
         )
 
-        store = QdrantVectorStore(
-            client=client,
-            collection_name="video_text",
-            dense_vector_name=None
+        print("✅ Collection created")
+        client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name="video",
+                field_schema="keyword"
         )
 
-        embed_model = HuggingFaceEmbedding(
-            model_name="BAAI/bge-base-en-v1.5"
+        client.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name="source",
+                field_schema="keyword"
         )
 
-        # Force global embedding model
-        Settings.embed_model = embed_model
+        print("✅ Payload indexes created")    
 
-        index = VectorStoreIndex.from_vector_store(
-            store,
-            embed_model=embed_model
-        )
+    embed_model = HuggingFaceEmbedding(
+        model_name="BAAI/bge-base-en-v1.5"
+    )
 
-        retriever = index.as_retriever(similarity_top_k=5)
-
-        print("✅ Qdrant Ready")
-
-    except Exception as e:
-        print("❌ Qdrant failed:", e)
+    print("✅ Qdrant Ready")
 
 
-def get_store():
+def get_client():
     init_qdrant()
-    return store
+    return client
 
 
 def get_embed_model():
@@ -60,14 +67,34 @@ def get_embed_model():
     return embed_model
 
 
+# 🔥 DIRECT SEARCH (NO LlamaIndex)
 def search(query: str):
     init_qdrant()
 
-    if retriever is None:
-        return []
+    query_vector = embed_model.get_text_embedding(query)
 
-    try:
-        return retriever.retrieve(query)
-    except Exception as e:
-        print("❌ Search error:", e)
-        return []
+    results = client.query_points(
+        collection_name=COLLECTION_NAME,
+        query=query_vector,
+        limit=5
+    )
+    
+    formatted = []
+
+    for r in results.points:
+        payload = r.payload or {}
+
+        formatted.append({
+            "text": payload.get("text", ""),
+            "metadata": payload,
+            "score": r.score
+        })
+
+    print("\n🔍 DEBUG RESULTS ------------------")
+    for r in formatted:
+        print("TEXT:", r["text"][:50])
+        print("META:", r["metadata"])
+        print("SCORE:", r["score"])
+        print("----------------------------------")
+
+    return formatted

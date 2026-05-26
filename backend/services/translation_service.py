@@ -20,7 +20,9 @@ def detect_lang(text: str) -> str:
         "korbo", "bolo", "dekhao", "kivabe"
     ]
 
-    if any(word in t for word in bn_words):
+    tokens = t.split()
+
+    if any(word in tokens for word in bn_words):
         return "bn"
 
     # Roman Hindi hints
@@ -29,7 +31,7 @@ def detect_lang(text: str) -> str:
         "dikhao", "batao", "kaun"
     ]
 
-    if any(word in t for word in hi_words):
+    if any(word in tokens for word in hi_words):
         return "hi"
 
     # Short ambiguous text
@@ -39,7 +41,7 @@ def detect_lang(text: str) -> str:
     try:
         best = detect_langs(t)[0]
 
-        if best.prob < 0.80:
+        if best.prob < 0.55:
             return "en"
 
         return best.lang
