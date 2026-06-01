@@ -9,14 +9,27 @@ from qdrant_client.models import (
     FilterSelector
 )
 import shutil
+import cloudinary.uploader
 import re
 from services.video_generator import generate_video
 from models.schemas import ChatRequest, ChatResponse, SourceItem
 from services.translation_service import detect_lang, to_english, translate_back
 from services.storage_service import upload_video
-from services.rag_engine import init_qdrant, search
+from services.rag_engine import (
+    init_qdrant,
+    search,
+    get_client,
+    COLLECTION_NAME
+)
 from fastapi.staticfiles import StaticFiles
+from services.file_db import (
+    init_db,
+    add_file,
+    get_all_files,
+    delete_file
+)
 app = FastAPI()
+init_db()
 app.mount("/temp_videos", StaticFiles(directory="temp_videos"), name="temp_videos")
 # -----------------------------
 # CORS
@@ -279,6 +292,22 @@ def chat(req: ChatRequest):
         instruction = "Answer ONLY in concise bullet points from the retrieved context."
     else:
         instruction = "Answer ONLY from the retrieved context. Do not add extra explanations."
+    # -----------------------------
+    # CONVERSATION MEMORY
+    # -----------------------------
+    chat_history = sessions.get(req.session_id, [])
+
+    history_text = ""
+
+    for msg in chat_history[-6:]:
+
+        role = msg["role"]
+
+        if role == "user":
+            history_text += f"User: {msg['content']}\n"
+
+        else:
+            history_text += f"Assistant: {msg['content']}\n"    
 
     # -----------------------------
     # PROMPT (FIXED)
@@ -301,6 +330,8 @@ IMPORTANT RULES:
 - If multiple reasons exist, list ONLY those reasons
 - Never hallucinate extra technical explanations
 
+CONVERSATION HISTORY:
+{history_text}
 CONTEXT:
 {context}
 
@@ -339,7 +370,8 @@ AFTER THAT:
 - Explain like a teacher
 - Keep answer concise but useful
 - NEVER switch language unnecessarily
-
+CONVERSATION HISTORY:
+{history_text}
 QUESTION:
 {english_query}
 """
@@ -401,14 +433,29 @@ async def upload(files: List[UploadFile] = File(...)):
             # VIDEO
             # -----------------------------
             if file.filename.endswith((".mp4", ".mov", ".avi")):
-                cloud = upload_video(temp_path)
 
-                process_video(
-                    temp_path,
-                    cloud["url"],
-                    file.filename
-                )
+               cloud = upload_video(temp_path)
 
+               process_video(
+                   temp_path,
+                   cloud["url"],
+                   file.filename
+               )
+
+    # -----------------------------
+    # SAVE FILE METADATA
+    # -----------------------------
+               size_mb = round(
+                   os.path.getsize(temp_path) / (1024 * 1024),
+                   2
+               )
+
+               add_file(
+                   filename=file.filename,
+                   filetype="video",
+                   cloudinary_url=cloud["url"],
+                   size_mb=size_mb
+               )
             # -----------------------------
             # DOCUMENT
             # -----------------------------
@@ -434,48 +481,120 @@ async def upload(files: List[UploadFile] = File(...)):
         "failed": failed
     }
 
+# -----------------------------
+# FILE MANAGEMENT
+# -----------------------------
+@app.get("/api/files")
+def list_files():
+
+    files = get_all_files()
+
+    formatted = []
+
+    for f in files:
+
+        formatted.append({
+            "id": f[0],
+            "filename": f[1],
+            "filetype": f[2],
+            "cloudinary_url": f[3],
+            "size_mb": f[4],
+            "uploaded_at": f[5]
+        })
+
+    return formatted
 
 # -----------------------------
 # DELETE FILE
 # -----------------------------
-@app.delete("/api/delete/{filename}")
-def delete_file(filename: str):
-    from services.rag_engine import get_client, COLLECTION_NAME
+@app.delete("/api/files/{file_id}")
+def delete_uploaded_file(file_id: int):
 
-    client = get_client()
+    files = get_all_files()
 
-    client.delete(
-       collection_name=COLLECTION_NAME,
-       wait=True,
-       points_selector=FilterSelector(
-           filter=Filter(
-               must=[
-                   FieldCondition(
-                       key="video",
-                       match=MatchValue(value=filename)
-                   )
-               ]
-           )
-       )
-    )
-    client.delete(
-       collection_name=COLLECTION_NAME,
-       wait=True,
-       points_selector=FilterSelector(
-           filter=Filter(
-               must=[
-                   FieldCondition(
-                       key="source",
-                       match=MatchValue(value=filename)
-                   )
-               ]
-           )
-       )
-    )
+    target = None
 
-   
+    for f in files:
 
-    return {"status": f"{filename} deleted"}
+        if f[0] == file_id:
+            target = f
+            break
+
+    if not target:
+        return {
+            "success": False,
+            "message": "File not found"
+        }
+
+    filename = target[1]
+    cloudinary_url = target[3]
+
+    try:
+
+        # --------------------------------
+        # DELETE FROM QDRANT
+        # --------------------------------
+        client = get_client()
+
+        client.delete(
+            collection_name=COLLECTION_NAME,
+            wait=True,
+            points_selector=FilterSelector(
+                filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="video",
+                            match=MatchValue(value=filename)
+                        )
+                    ]
+                )
+            )
+        )
+
+        print("✅ Deleted Qdrant vectors")
+
+    except Exception as e:
+        print("❌ Qdrant delete error:", e)
+
+    try:
+
+        # --------------------------------
+        # DELETE FROM CLOUDINARY
+        # --------------------------------
+        public_id = (
+            cloudinary_url
+            .split("/")[-1]
+            .split(".")[0]
+        )
+
+        cloudinary.uploader.destroy(
+            public_id,
+            resource_type="video"
+        )
+
+        print("✅ Deleted Cloudinary video")
+
+    except Exception as e:
+        print("❌ Cloudinary delete error:", e)
+
+    try:
+
+        # --------------------------------
+        # DELETE SQLITE ENTRY
+        # --------------------------------
+        delete_file(file_id)
+
+        print("✅ Deleted SQLite entry")
+
+    except Exception as e:
+        print("❌ SQLite delete error:", e)
+
+    return {
+        "success": True,
+        "message": "File deleted successfully"
+    }
+
+
 @app.post("/api/generate-video")
 def generate_video_api(req: ChatRequest):
     from services.rag_engine import search
