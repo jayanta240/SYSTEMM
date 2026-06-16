@@ -46,3 +46,38 @@ export async function createSession() {
   });
   return res.json();
 }
+
+export async function uploadImage(file: File) {
+
+  const form = new FormData();
+
+  form.append("file", file);
+
+  const res = await fetch(
+    `${BASE}/api/upload-image`,
+    {
+      method: "POST",
+      body: form,
+    }
+  );
+
+  return res.json();
+}
+export async function diagnoseImage(
+  file: File
+) {
+
+  const form = new FormData();
+
+  form.append("file", file);
+
+  const res = await fetch(
+    `${BASE}/api/diagnose-image`,
+    {
+      method: "POST",
+      body: form,
+    }
+  );
+
+  return res.json();
+}

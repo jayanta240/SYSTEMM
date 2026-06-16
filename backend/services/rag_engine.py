@@ -4,7 +4,7 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from config import settings
 
 COLLECTION_NAME = "learning_content"
-
+ISSUE_COLLECTION = "issue_images"
 client = None
 embed_model = None
 
@@ -23,6 +23,19 @@ def init_qdrant():
 
     # create collection if not exists
     collections = [c.name for c in client.get_collections().collections]
+    if ISSUE_COLLECTION not in collections:
+
+     print("⚡ Creating issue image collection...")
+
+     client.create_collection(
+         collection_name=ISSUE_COLLECTION,
+         vectors_config=VectorParams(
+             size=512,
+             distance=Distance.COSINE
+ )
+     )
+
+     print("✅ Issue image collection created")
 
     if COLLECTION_NAME not in collections:
         print("⚡ Creating Qdrant collection...")

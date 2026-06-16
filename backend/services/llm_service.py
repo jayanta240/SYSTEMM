@@ -1,6 +1,6 @@
 from openai import OpenAI
 from config import settings
-
+print("GROQ KEY:", settings.GROQ_API_KEY)
 client = OpenAI(
     api_key=settings.GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
