@@ -6,12 +6,15 @@ import {
   sendMessage,
   uploadVideos,
   generateVideo,
+  uploadImage,
   getMessages,
   createSession,
+  diagnoseImage
 } from "../lib/api";
 
 export default function Home() {
   const [message, setMessage] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [session, setSession] = useState("chat-1");
   const [loading, setLoading] = useState(false);
@@ -33,27 +36,106 @@ export default function Home() {
   };
 
   const handleSend = async () => {
-    if (!message.trim()) return;
 
-    const userMsg = { role: "user", content: message };
-    setMessages((prev) => [...prev, userMsg]);
+     if (!message.trim() && !imageFile) return;
 
-    setLoading(true);
+     const userMsg = {
+       role: "user",
+       content: message || "📷 Image Uploaded",
+     };
 
-    const res = await sendMessage(message, session);
+     setMessages((prev) => [...prev, userMsg]);
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "assistant",
-        content: res.answer,
-        sources: res.sources,
-      },
-    ]);
+     setLoading(true);
 
-    setLoading(false);
-    setMessage("");
-  };
+     try {
+
+       let imageUrl = null;
+
+    // --------------------
+    // UPLOAD IMAGE FIRST
+    // --------------------
+       if (imageFile) {
+
+       const diagnosis =
+         await diagnoseImage(
+           imageFile
+         );
+
+       let answer = "";
+
+       if (diagnosis.success) {
+
+         answer = `
+     Detected Issue:
+     ${diagnosis.problem}
+
+     Confidence:
+     ${(
+       diagnosis.similarity * 100
+     ).toFixed(1)}%
+
+     Solution:
+     ${diagnosis.solution}
+     `;
+
+       } else {
+
+         answer =
+           "No matching issue found.";
+       }
+
+       setMessages((prev) => [
+         ...prev,
+         {
+           role: "assistant",
+           content: answer,
+         },
+       ]);
+
+       setImageFile(null);
+       setMessage("");
+       setLoading(false);
+
+       return;
+     }
+
+    // --------------------
+    // SEND CHAT MESSAGE
+    // --------------------
+       const res = await sendMessage(
+         message,
+         session
+       );
+
+       setMessages((prev) => [
+         ...prev,
+         {
+           role: "assistant",
+           content: res.answer,
+           sources: res.sources,
+         },
+       ]);
+
+    // clear image
+       setImageFile(null);
+
+       setMessage("");
+
+     } catch (err) {
+
+       console.error(err);
+
+       alert(
+         "Failed to send message"
+       );
+
+     } finally {
+
+       setLoading(false);
+
+     }
+   };
 
   const handleUpload = async (e: any) => {
     const files = e.target.files;
@@ -206,9 +288,29 @@ export default function Home() {
 
           <div ref={bottomRef} />
         </div>
-
+        {imageFile && (
+          <div className="px-4 pb-2 text-sm text-green-400">
+           📷 Selected: {imageFile.name}
+         </div>
+        )}
         {/* INPUT */}
-        <div className="p-4 border-t border-gray-700 flex gap-3">
+        <div className="p-4 border-t border-gray-700 flex gap-3 items-center">
+
+          {/* IMAGE UPLOAD */}
+          <label className="bg-gray-700 hover:bg-gray-600 px-4 py-3 rounded-lg cursor-pointer">
+            📷
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.[0]) {
+                  setImageFile(e.target.files[0]);
+                }
+              }}
+            />
+          </label>
+
           <input
             value={message}
             onChange={(e) => setMessage(e.target.value)}
@@ -222,6 +324,7 @@ export default function Home() {
           >
             Send
           </button>
+
         </div>
       </div>
     </div>

@@ -8,6 +8,7 @@ from qdrant_client.models import (
     MatchValue,
     FilterSelector
 )
+from services.image_service import upload_issue_image
 import shutil
 import cloudinary.uploader
 import re
@@ -21,12 +22,28 @@ from services.rag_engine import (
     get_client,
     COLLECTION_NAME
 )
+from services.issue_search_service import (
+    search_issue_image
+)
+from uuid import uuid4
+from qdrant_client.models import PointStruct
+from services.image_embedding_service import (
+    get_image_embedding
+)
+
+from services.rag_engine import (
+    get_client,
+    ISSUE_COLLECTION
+)
+from fastapi import Form
 from fastapi.staticfiles import StaticFiles
 from services.file_db import (
     init_db,
     add_file,
     get_all_files,
-    delete_file
+    delete_file,
+    add_issue,
+    get_all_issues
 )
 app = FastAPI()
 init_db()
@@ -594,7 +611,130 @@ def delete_uploaded_file(file_id: int):
         "message": "File deleted successfully"
     }
 
+@app.post("/api/upload-image")
+async def upload_image(
+    file: UploadFile = File(...)
+):
 
+    temp_path = f"temp/{file.filename}"
+
+    with open(temp_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    cloud = upload_issue_image(temp_path)
+
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
+
+    return {
+        "success": True,
+        "image_url": cloud["url"],
+        "public_id": cloud["public_id"]
+    }
+@app.post("/api/upload-issue")
+async def upload_issue(
+    file: UploadFile = File(...),
+    problem: str = Form(...),
+    solution: str = Form(...)
+):
+
+    temp_path = f"temp/{file.filename}"
+
+    with open(temp_path, "wb") as buffer:
+        shutil.copyfileobj(
+            file.file,
+            buffer
+        )
+
+    cloud = upload_issue_image(temp_path)
+    embedding = get_image_embedding(
+         temp_path
+    )
+
+    client = get_client()
+
+    client.upsert(
+        collection_name=ISSUE_COLLECTION,
+        points=[
+            PointStruct(
+                id=str(uuid4()),
+                vector=embedding,
+                payload={
+                    "problem": problem,
+                    "solution": solution,
+                    "image_url": cloud["url"]
+                }
+            )
+        ]
+    )
+
+    print("✅ Issue image stored in Qdrant")
+
+    add_issue(
+        image_url=cloud["url"],
+        public_id=cloud["public_id"],
+        problem=problem,
+        solution=solution
+    )
+
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
+
+    return {
+        "success": True,
+        "image_url": cloud["url"]
+    }
+@app.get("/api/issues")
+def list_issues():
+
+    issues = get_all_issues()
+
+    result = []
+
+    for i in issues:
+
+        result.append({
+            "id": i[0],
+            "image_url": i[1],
+            "public_id": i[2],
+            "problem": i[3],
+            "solution": i[4],
+            "created_at": i[5]
+        })
+
+    return result
+@app.post("/api/diagnose-image")
+async def diagnose_image(
+    file: UploadFile = File(...)
+):
+
+    temp_path = f"temp/{file.filename}"
+
+    with open(temp_path, "wb") as buffer:
+        shutil.copyfileobj(
+            file.file,
+            buffer
+        )
+
+    result = search_issue_image(
+        temp_path
+    )
+
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
+
+    if not result:
+        return {
+            "success": False,
+            "message": "No matching issue found"
+        }
+
+    return {
+        "success": True,
+        "similarity": result["score"],
+        "problem": result["problem"],
+        "solution": result["solution"]
+    }
 @app.post("/api/generate-video")
 def generate_video_api(req: ChatRequest):
     from services.rag_engine import search
